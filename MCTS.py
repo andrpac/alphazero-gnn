@@ -23,8 +23,7 @@ class MCTS():
         self.Es = {}   # stores game.getGameEnded ended for board s
         self.Vs = {}   # stores game.getValidMoves for board s
         
-        # Add cycle detection
-        self._max_depth = 50
+        # Cycle detection only
         self._path = set()
 
     def getActionProb(self, canonicalBoard, temp=1):
@@ -39,7 +38,7 @@ class MCTS():
         for i in range(self.args.numMCTSSims):
             # Reset path for each simulation
             self._path = set()
-            self.search(canonicalBoard, 0)
+            self.search(canonicalBoard)
 
         s = self.game.stringRepresentation(canonicalBoard)
         counts = [self.Nsa[(s, a)] if (s, a) in self.Nsa else 0 for a in range(self.game.getActionSize())]
@@ -64,7 +63,7 @@ class MCTS():
         probs = [x / counts_sum for x in counts]
         return probs
 
-    def search(self, canonicalBoard, depth=0):
+    def search(self, canonicalBoard):
         """
         This function performs one iteration of MCTS. It is recursively called
         till a leaf node is found. The action chosen at each node is one that
@@ -79,16 +78,12 @@ class MCTS():
         Returns:
             v: the value of the current canonicalBoard for the current player
                Note: We don't negate for single-player games
-        """
-        # Check for max depth
-        if depth >= self._max_depth:
-            return 0
-            
+        """    
         s = self.game.stringRepresentation(canonicalBoard)
         
-        # Check for cycles
+        # Check for cycles - if we've seen this state in current path
         if s in self._path:
-            return -0.1  # Small penalty for cycles
+            return -1.0  # Strong penalty for cycles
             
         # Add to path for cycle detection
         self._path.add(s)
@@ -97,7 +92,7 @@ class MCTS():
             self.Es[s] = self.game.getGameEnded(canonicalBoard, 1)
         if self.Es[s] != 0:
             # Terminal node - don't negate for single-player games
-            self._path.remove(s)
+            self._path.remove(s)  # Clean up path before return
             return self.Es[s]
 
         if s not in self.Ps:
@@ -128,7 +123,7 @@ class MCTS():
                 self.Vs[s] = valids
                 self.Ns[s] = 0
                 
-                self._path.remove(s)
+                self._path.remove(s)  # Clean up path before return
                 return 0
 
         valids = self.Vs[s]
@@ -152,17 +147,17 @@ class MCTS():
         
         # Handle edge case: no valid actions found
         if a == -1:
-            self._path.remove(s)
+            self._path.remove(s)  # Clean up path before return
             return 0
             
         try:
             next_s, next_player = self.game.getNextState(canonicalBoard, 1, a)
             next_s = self.game.getCanonicalForm(next_s, next_player)
 
-            v = self.search(next_s, depth + 1)
+            v = self.search(next_s)
         except Exception as e:
             log.error(f"Error in search: {e}")
-            self._path.remove(s)
+            self._path.remove(s)  # Clean up path before return
             return 0
 
         if (s, a) in self.Qsa:

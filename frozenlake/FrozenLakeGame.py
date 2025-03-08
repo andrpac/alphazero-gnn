@@ -4,29 +4,41 @@ import gymnasium as gym
 class FrozenLakeGame:
     """FrozenLake implementation for AlphaZero-style MCTS"""
 
-    def __init__(self, map_size=4):
-        """Initialize the game environment"""
+    def __init__(self, map_size=4, custom_map=None, is_slippery=False, render_mode=None):
+        """
+        Initialize the game environment
+        
+        Args:
+            map_size: Size of the map (4 or 8)
+            custom_map: Optional custom map layout as a list of strings
+            is_slippery: Whether the ice is slippery (stochastic transitions)
+            render_mode: Render mode for gymnasium
+        """
         self.map_size = map_size
         self.action_size = 4  # up, right, down, left
+        self.is_slippery = is_slippery
+        self.render_mode = render_mode
         
-        # Create environment with a simpler map layout
-        if map_size == 4:
-            # Custom map with fewer holes for easier learning
-            self.env = gym.make('FrozenLake-v1', desc=[
-                "SFFF",  # S: start, F: frozen (safe), H: hole, G: goal
-                "FHFF",  # Only one hole in row 2
-                "FFFF",  # No holes in row 3
-                "FFFG"   # G: goal at bottom right
-            ], is_slippery=False, render_mode=None)
+        # Create environment with appropriate map
+        if custom_map is not None:
+            # Use provided custom map
+            self.env = gym.make('FrozenLake-v1', desc=custom_map, 
+                               is_slippery=is_slippery, render_mode=render_mode)
+        elif map_size == 8:
+            # Use standard 8x8 map
+            self.env = gym.make('FrozenLake8x8-v1', 
+                               is_slippery=is_slippery, render_mode=render_mode)
         else:
-            # Use standard 8x8 map for larger size
-            self.env = gym.make('FrozenLake8x8-v1', is_slippery=False, render_mode=None)
+            # Default 4x4 map
+            self.env = gym.make('FrozenLake-v1', 
+                               is_slippery=is_slippery, render_mode=render_mode)
         
         # Reset environment and get initial state
         self.env.reset()
         
         # Store map description
         self.desc = self.env.unwrapped.desc
+        self.map_size = len(self.desc)  # Update map_size from actual map dimensions
         
         # Find goal position
         self.goal_pos = self.find_goal_position()
@@ -44,8 +56,22 @@ class FrozenLakeGame:
     
     def getInitBoard(self):
         """Get initial board state (one-hot encoded)"""
+        # Find the starting position 'S' in the map
+        start_pos = None
+        for i in range(self.map_size):
+            for j in range(self.map_size):
+                if self.desc[i][j] == b'S':
+                    start_pos = (i, j)
+                    break
+            if start_pos:
+                break
+        
+        # Default to top-left if 'S' not found
+        if not start_pos:
+            start_pos = (0, 0)
+            
         board = np.zeros((self.map_size, self.map_size))
-        board[0, 0] = 1  # Initial position is top-left
+        board[start_pos] = 1
         return board
     
     def getBoardSize(self):
@@ -57,9 +83,18 @@ class FrozenLakeGame:
         return self.action_size
     
     def getNextState(self, board, player, action):
-        """Get next state after applying action"""
+        """
+        Get next state after applying action
+        
+        Note: In slippery mode, this only returns the deterministic outcome
+        The actual gameplay should handle stochasticity separately
+        """
         # Get current position
-        pos = np.unravel_index(np.argmax(board) if np.sum(board) > 0 else 0, board.shape)
+        if np.sum(board) == 0:
+            pos = (0, 0)  # Default to starting position if board is empty
+        else:
+            pos = np.unravel_index(np.argmax(board), board.shape)
+        
         row, col = pos
         
         # Calculate new position based on action
@@ -88,7 +123,11 @@ class FrozenLakeGame:
             return np.zeros(self.action_size)
         
         # Get current position
-        pos = np.unravel_index(np.argmax(board) if np.sum(board) > 0 else 0, board.shape)
+        if np.sum(board) == 0:
+            pos = (0, 0)  # Default to starting position if board is empty
+        else:
+            pos = np.unravel_index(np.argmax(board), board.shape)
+        
         row, col = pos
         
         # Check boundaries - can't move outside the grid
@@ -125,31 +164,6 @@ class FrozenLakeGame:
         # Non-terminal state
         return 0
     
-    # This is a new function that provides reward shaping outside of the terminal states
-    # Used for training guidance but not for MCTS evaluation
-    def getDistanceReward(self, board):
-        """Get distance-based reward for non-terminal states (for training only)"""
-        if np.sum(board) == 0:
-            return 0
-            
-        # Get current position
-        pos = np.unravel_index(np.argmax(board), board.shape)
-        row, col = pos
-        
-        # For non-terminal states, return distance-based reward
-        goal_row, goal_col = self.goal_pos
-        
-        # Calculate Manhattan distance to goal
-        distance = abs(row - goal_row) + abs(col - goal_col)
-        
-        # Normalize distance to [0, 1] range
-        max_distance = self.map_size * 2
-        normalized_distance = distance / max_distance
-        
-        # Return reward inversely proportional to distance
-        # Higher reward when closer to goal
-        return 0.1 + 0.4 * (1.0 - normalized_distance)
-    
     def getCanonicalForm(self, board, player):
         """Single-player game, so canonical form is just the board"""
         return board
@@ -166,18 +180,27 @@ class FrozenLakeGame:
         return f"{pos[0]},{pos[1]}"
     
     def render(self):
-        """Render the environment (optional)"""
+        """Render the environment"""
         try:
-            renderer = gym.make(
-                f'FrozenLake{"8x8-" if self.map_size == 8 else "-"}v1',
-                desc=self.desc,
-                is_slippery=False,
-                render_mode='human'
-            )
-            if hasattr(self, 'board') and self.board is not None:
-                pos = np.unravel_index(np.argmax(self.board), self.board.shape)
-                state_idx = pos[0] * self.map_size + pos[1]
-                renderer.unwrapped.s = state_idx
-            renderer.render()
+            # If we already have a render_mode, use the existing environment
+            if self.render_mode:
+                if hasattr(self, 'board') and self.board is not None:
+                    pos = np.unravel_index(np.argmax(self.board), self.board.shape)
+                    state_idx = pos[0] * self.map_size + pos[1]
+                    self.env.unwrapped.s = state_idx
+                self.env.render()
+            else:
+                # Create a temporary environment with human rendering
+                renderer = gym.make(
+                    'FrozenLake-v1' if self.map_size <= 4 else 'FrozenLake8x8-v1',
+                    desc=self.desc,
+                    is_slippery=self.is_slippery,
+                    render_mode='human'
+                )
+                if hasattr(self, 'board') and self.board is not None:
+                    pos = np.unravel_index(np.argmax(self.board), self.board.shape)
+                    state_idx = pos[0] * self.map_size + pos[1]
+                    renderer.unwrapped.s = state_idx
+                renderer.render()
         except Exception as e:
             print(f"Rendering error: {e}")
