@@ -89,12 +89,12 @@ class FrozenLakeGame:
         Note: In slippery mode, this only returns the deterministic outcome
         The actual gameplay should handle stochasticity separately
         """
-        # Get current position
         if np.sum(board) == 0:
-            pos = (0, 0)  # Default to starting position if board is empty
-        else:
-            pos = np.unravel_index(np.argmax(board), board.shape)
-        
+            # If board is empty, create a new one with starting position
+            return self.getInitBoard(), player
+            
+        # Get current position
+        pos = np.unravel_index(np.argmax(board), board.shape)
         row, col = pos
         
         # Calculate new position based on action
@@ -111,23 +111,27 @@ class FrozenLakeGame:
         next_board = np.zeros_like(board)
         next_board[new_row, new_col] = 1
         
+        # Store current board for rendering
+        self.board = next_board
+        
         return next_board, player  # Player doesn't change in single-player games
     
     def getValidMoves(self, board, player):
         """Get valid moves from current state"""
         # All moves are valid by default
-        valid_moves = np.ones(self.action_size)
+        valid_moves = np.ones(self.action_size, dtype=np.int8)
         
         # If game ended, no moves are valid
         if self.getGameEnded(board, player) != 0:
-            return np.zeros(self.action_size)
+            return np.zeros(self.action_size, dtype=np.int8)
         
         # Get current position
         if np.sum(board) == 0:
-            pos = (0, 0)  # Default to starting position if board is empty
-        else:
-            pos = np.unravel_index(np.argmax(board), board.shape)
+            # If the board is empty, consider it's at the start position
+            # This is a special case handling
+            return valid_moves
         
+        pos = np.unravel_index(np.argmax(board), board.shape)
         row, col = pos
         
         # Check boundaries - can't move outside the grid
@@ -135,6 +139,21 @@ class FrozenLakeGame:
         if row == self.map_size - 1: valid_moves[2] = 0  # Can't go down
         if col == 0: valid_moves[3] = 0  # Can't go left
         if col == self.map_size - 1: valid_moves[1] = 0  # Can't go right
+        
+        # Discourage but don't forbid moving into holes
+        # This makes learning easier while keeping the game rules intact
+        for a in range(self.action_size):
+            if valid_moves[a]:
+                # Calculate new position
+                dr, dc = [(-1, 0), (0, 1), (1, 0), (0, -1)][a]
+                new_row, new_col = row + dr, col + dc
+                
+                # Check if in bounds
+                if 0 <= new_row < self.map_size and 0 <= new_col < self.map_size:
+                    # Check if it's a hole - don't forbid but will learn to avoid
+                    if self.desc[new_row][new_col] == b'H':
+                        # Keep valid but will learn negative reward
+                        pass
         
         return valid_moves
     
