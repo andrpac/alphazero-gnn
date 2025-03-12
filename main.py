@@ -4,6 +4,7 @@ import coloredlogs
 import os
 
 from Coach import Coach
+from MCTS import MCTS
 from frozenlake.FrozenLakeGame import FrozenLakeGame
 from frozenlake.FrozenLakeNet import FrozenLakeNet
 
@@ -20,7 +21,7 @@ class dotdict(dict):
 
 def main():
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description='AlphaZero for FrozenLake')
+    parser = argparse.ArgumentParser(description='AlphaZero for FrozenLake with GNN enhancements')
     parser.add_argument('--map_size', type=int, default=4, choices=[4, 8], 
                         help='Size of the FrozenLake map (4 or 8)')
     parser.add_argument('--numIters', type=int, default=30, 
@@ -37,6 +38,11 @@ def main():
                         help='Directory to save checkpoints')
     parser.add_argument('--load_model', action='store_true', 
                         help='Load the latest model before training')
+    # GNN-specific parameters
+    parser.add_argument('--gnn_layers', type=int, default=2, 
+                        help='Number of GNN layers for message passing')
+    parser.add_argument('--embedding_dim', type=int, default=64, 
+                        help='Dimension of state embeddings for GNN')
     
     args = parser.parse_args()
     
@@ -59,6 +65,9 @@ def main():
         'batch_size': 32,
         'num_channels': 32,  # Fewer channels for simpler game
         'map_size': args.map_size,
+        # GNN-specific parameters
+        'gnn_layers': args.gnn_layers,
+        'embedding_dim': args.embedding_dim,
     })
     
     # Create checkpoint directory if it doesn't exist
@@ -73,7 +82,7 @@ def main():
     game = FrozenLakeGame(map_size=args.map_size)
     
     # Initialize the neural network
-    log.info('Initializing Neural Network...')
+    log.info('Initializing Neural Network with GNN enhancements...')
     nnet = FrozenLakeNet(game, args)
     
     # Load model if requested
@@ -101,7 +110,7 @@ def main():
             log.warning('Starting with empty training examples')
     
     # Start training
-    log.info('Starting the learning process')
+    log.info('Starting the learning process with GNN enhancement')
     try:
         coach.learn()
     except KeyboardInterrupt:

@@ -8,14 +8,14 @@ log = logging.getLogger(__name__)
 
 class MCTS():
     """
-    This class handles the MCTS tree.
+    MCTS implementation with support for GNN-enhanced neural networks.
     """
 
     def __init__(self, game, nnet, args):
         self.game = game
         self.nnet = nnet
         self.args = args
-        self.Qsa = {}  # stores Q values for s,a (as defined in the paper)
+        self.Qsa = {}  # stores Q values for s,a
         self.Nsa = {}  # stores #times edge s,a was visited
         self.Ns = {}   # stores #times board s was visited
         self.Ps = {}   # stores initial policy (returned by neural net)
@@ -23,8 +23,11 @@ class MCTS():
         self.Es = {}   # stores game.getGameEnded ended for board s
         self.Vs = {}   # stores game.getValidMoves for board s
         
-        # Cycle detection only
+        # Cycle detection
         self._path = set()
+        
+        # Cache for neighboring states - avoid regenerating them repeatedly
+        self.neighbor_cache = {}
 
     def getActionProb(self, canonicalBoard, temp=1):
         """
@@ -68,6 +71,43 @@ class MCTS():
         probs = [x / counts_sum for x in counts]
         return probs
 
+    def get_neighbor_states(self, canonicalBoard):
+        """
+        Generate all possible next states from the current board by taking each valid action.
+        
+        Args:
+            canonicalBoard: Current board state
+            
+        Returns:
+            List of neighboring states
+        """
+        s = self.game.stringRepresentation(canonicalBoard)
+        
+        # Use cached neighbors if available
+        if s in self.neighbor_cache:
+            return self.neighbor_cache[s]
+            
+        # Get valid moves
+        if s not in self.Vs:
+            self.Vs[s] = self.game.getValidMoves(canonicalBoard, 1)
+        valid_moves = self.Vs[s]
+        
+        # Initialize list to store neighbor states
+        neighbor_states = [canonicalBoard]  # Include current state as first
+        
+        # Try each valid action
+        for action in range(self.game.getActionSize()):
+            if valid_moves[action]:
+                # Get next state
+                next_state, _ = self.game.getNextState(canonicalBoard, 1, action)
+                next_canonical = self.game.getCanonicalForm(next_state, 1)
+                neighbor_states.append(next_canonical)
+        
+        # Cache the result
+        self.neighbor_cache[s] = neighbor_states
+        
+        return neighbor_states
+
     def search(self, canonicalBoard):
         """
         This function performs one iteration of MCTS. It is recursively called
@@ -80,10 +120,8 @@ class MCTS():
         outcome is propagated up the search path. The values of Ns, Nsa, Qsa are
         updated.
 
-        Returns:
-            v: the value of the current canonicalBoard for the current player
-               Note: We don't negate for single-player games
-        """    
+        NOTE: We pass neighboring states to the neural network for GNN processing.
+        """
         s = self.game.stringRepresentation(canonicalBoard)
         
         # Check for cycles - if we've seen this state in current path
@@ -104,10 +142,14 @@ class MCTS():
 
             # Check if we've seen this state before
             if s not in self.Ps:
-                # Leaf node
+                # Leaf node - generate neighbors and get neural network prediction
+                neighbor_states = self.get_neighbor_states(canonicalBoard)
+                
                 try:
-                    self.Ps[s], v = self.nnet.predict(canonicalBoard)
-                    valids = self.game.getValidMoves(canonicalBoard, 1)
+                    # Call neural network with neighboring states
+                    self.Ps[s], v = self.nnet.predict(canonicalBoard, neighbor_states)
+                    
+                    valids = self.Vs[s]  # Already computed in get_neighbor_states
                     self.Ps[s] = self.Ps[s] * valids  # masking invalid moves
                     sum_Ps_s = np.sum(self.Ps[s])
                     if sum_Ps_s > 0:
@@ -117,18 +159,16 @@ class MCTS():
                         log.warning("All valid moves were masked, using uniform policy")
                         self.Ps[s] = valids / np.sum(valids)
 
-                    self.Vs[s] = valids
                     self.Ns[s] = 0
                     
                     # Remove from path before returning
                     self._path.remove(s)
-                    return v  # Don't negate for single-player games
+                    return v
                 except Exception as e:
                     log.error(f"Error in neural network prediction: {e}")
                     # Fallback to uniform valid moves
-                    valids = self.game.getValidMoves(canonicalBoard, 1)
+                    valids = self.Vs[s]
                     self.Ps[s] = valids / np.sum(valids)
-                    self.Vs[s] = valids
                     self.Ns[s] = 0
                     
                     self._path.remove(s)  # Clean up path before return
@@ -178,7 +218,7 @@ class MCTS():
             
             # Remove from path before returning
             self._path.remove(s)
-            return v  # Don't negate for single-player games
+            return v
             
         except Exception as e:
             # Ensure path is always cleaned up on exception
