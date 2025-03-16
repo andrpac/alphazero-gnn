@@ -1,0 +1,31 @@
+# Connect4 AlphaZero Configuration
+
+# Game parameters
+game:
+  board_size: 7          # Size of the Connect4 board (standard is 7 columns, but uses square board)
+
+# Neural Network parameters
+neural_network:
+  lr: 0.001              # Learning rate
+  dropout: 0.3           # Dropout rate
+  epochs: 30             # Training epochs per iteration
+  batch_size: 128        # Batch size for training
+
+# Training parameters
+training:
+  numIters: 50           # Number of training iterations
+  numEps: 100            # Number of complete self-play games per iteration
+  tempThreshold: 15      # Move threshold for changing temperature
+  updateThreshold: 0.6   # Win rate threshold to replace current best model
+  maxlenOfQueue: 300000  # Maximum length of training examples queue
+  numItersForTrainExamplesHistory: 5   # Number of iterations to keep training examples
+  checkpoint_path: "./checkpoints/"    # Base directory to save checkpoints
+
+# Self-play and MCTS parameters
+mcts:
+  numMCTSSims: 50        # Number of MCTS simulations per move
+  cpuct: 1.25            # Exploration constant in MCTS
+
+# Evaluation parameters
+evaluation:
+  arenaCompare: 40       # Number of games to play for model comparison

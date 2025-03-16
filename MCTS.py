@@ -8,7 +8,8 @@ log = logging.getLogger(__name__)
 
 class MCTS():
     """
-    MCTS implementation with support for GNN-enhanced neural networks.
+    MCTS implementation with support for both 1-player and 2-player games,
+    enhanced with GNN-based neural networks.
     """
 
     def __init__(self, game, nnet, args):
@@ -120,7 +121,8 @@ class MCTS():
         outcome is propagated up the search path. The values of Ns, Nsa, Qsa are
         updated.
 
-        NOTE: We pass neighboring states to the neural network for GNN processing.
+        NOTE: In 2-player games, we negate the value when propagating it up
+        the search path. In 1-player games, we don't negate.
         """
         s = self.game.stringRepresentation(canonicalBoard)
         
@@ -136,9 +138,15 @@ class MCTS():
             if s not in self.Es:
                 self.Es[s] = self.game.getGameEnded(canonicalBoard, 1)
             if self.Es[s] != 0:
-                # Terminal node - don't negate for single-player games
+                # Terminal node
+                result = self.Es[s]
                 self._path.remove(s)  # Clean up path before return
-                return self.Es[s]
+                
+                # For 2-player games, negate the result
+                if hasattr(self.game, 'is_two_player') and self.game.is_two_player:
+                    return -result
+                else:
+                    return result
 
             # Check if we've seen this state before
             if s not in self.Ps:
@@ -163,7 +171,13 @@ class MCTS():
                     
                     # Remove from path before returning
                     self._path.remove(s)
-                    return v
+                    
+                    # For 2-player games, negate v
+                    if hasattr(self.game, 'is_two_player') and self.game.is_two_player:
+                        return -v
+                    else:
+                        return v
+                        
                 except Exception as e:
                     log.error(f"Error in neural network prediction: {e}")
                     # Fallback to uniform valid moves
@@ -218,7 +232,12 @@ class MCTS():
             
             # Remove from path before returning
             self._path.remove(s)
-            return v
+            
+            # For 2-player games, negate v when returning
+            if hasattr(self.game, 'is_two_player') and self.game.is_two_player:
+                return -v
+            else:
+                return v
             
         except Exception as e:
             # Ensure path is always cleaned up on exception

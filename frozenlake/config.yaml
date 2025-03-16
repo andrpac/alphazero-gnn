@@ -1,0 +1,41 @@
+# FrozenLake AlphaZero Configuration
+
+# Game parameters
+game:
+  board_size: 4              # Size of the FrozenLake grid (4x4 standard, 8x8 also available)
+  is_slippery: false         # Whether transitions are stochastic (true) or deterministic (false)
+  render_mode: null          # Render mode (null, human, rgb_array)
+  # Uncomment below to use a custom map layout
+  # custom_map:
+  #   - "SFFF"
+  #   - "FHFH"
+  #   - "FFFH"
+  #   - "HFFG"
+
+# Neural Network parameters
+neural_network:
+  lr: 0.001                  # Learning rate
+  dropout: 0.3               # Dropout rate
+  epochs: 20                 # Training epochs per iteration
+  batch_size: 32             # Batch size for training
+  embedding_dim: 128         # Dimension for feature embeddings in GNN
+  gnn_layers: 3              # Number of GNN layers to use
+
+# Training parameters
+training:
+  numIters: 50               # Number of training iterations
+  numEps: 100                # Number of complete self-play games per iteration
+  tempThreshold: 15          # Move threshold for changing temperature
+  updateThreshold: 0.55      # Win rate threshold to replace current best model
+  maxlenOfQueue: 200000      # Maximum length of training examples queue
+  numItersForTrainExamplesHistory: 20  # Number of iterations to keep training examples
+  checkpoint_path: "./checkpoints/"    # Base directory to save checkpoints
+
+# Self-play and MCTS parameters
+mcts:
+  numMCTSSims: 50            # Number of MCTS simulations per move
+  cpuct: 2.0                 # Exploration constant in MCTS (higher for better exploration)
+
+# Evaluation parameters
+evaluation:
+  arenaCompare: 40           # Number of games to play for model comparison
