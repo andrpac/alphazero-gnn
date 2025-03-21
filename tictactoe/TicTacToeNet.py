@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
+import os
 
 class TicTacToeNet(nn.Module):
     """
@@ -136,6 +137,8 @@ class TicTacToeNNetWrapper():
     def save_checkpoint(self, folder, filename):
         """Save model checkpoint to file"""
         filepath = folder + '/' + filename
+        if not os.path.exists(folder):
+            os.makedirs(folder)
         torch.save({
             'state_dict': self.nnet.state_dict(),
         }, filepath)

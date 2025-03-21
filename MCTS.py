@@ -9,7 +9,7 @@ log = logging.getLogger(__name__)
 class MCTS():
     """
     MCTS implementation with support for both 1-player and 2-player games,
-    enhanced with GNN-based neural networks.
+    enhanced with GNN-based neural networks that uses only visited nodes in the current search path.
     """
 
     def __init__(self, game, nnet, args):
@@ -24,11 +24,10 @@ class MCTS():
         self.Es = {}   # stores game.getGameEnded ended for board s
         self.Vs = {}   # stores game.getValidMoves for board s
         
-        # Cycle detection
-        self._path = set()
-        
-        # Cache for neighboring states - avoid regenerating them repeatedly
-        self.neighbor_cache = {}
+        # Path tracking for GNN enhancement
+        self._path = set()       # For cycle detection (string representations)
+        self._path_boards = []   # For storing actual board states in the current path
+        self._path_depths = []   # For storing depths of each state in the path
 
     def getActionProb(self, canonicalBoard, temp=1):
         """
@@ -42,6 +41,8 @@ class MCTS():
         for i in range(self.args.numMCTSSims):
             # Reset path for each simulation
             self._path = set()
+            self._path_boards = []
+            self._path_depths = []
             self.search(canonicalBoard)
 
         s = self.game.stringRepresentation(canonicalBoard)
@@ -72,44 +73,7 @@ class MCTS():
         probs = [x / counts_sum for x in counts]
         return probs
 
-    def get_neighbor_states(self, canonicalBoard):
-        """
-        Generate all possible next states from the current board by taking each valid action.
-        
-        Args:
-            canonicalBoard: Current board state
-            
-        Returns:
-            List of neighboring states
-        """
-        s = self.game.stringRepresentation(canonicalBoard)
-        
-        # Use cached neighbors if available
-        if s in self.neighbor_cache:
-            return self.neighbor_cache[s]
-            
-        # Get valid moves
-        if s not in self.Vs:
-            self.Vs[s] = self.game.getValidMoves(canonicalBoard, 1)
-        valid_moves = self.Vs[s]
-        
-        # Initialize list to store neighbor states
-        neighbor_states = [canonicalBoard]  # Include current state as first
-        
-        # Try each valid action
-        for action in range(self.game.getActionSize()):
-            if valid_moves[action]:
-                # Get next state
-                next_state, _ = self.game.getNextState(canonicalBoard, 1, action)
-                next_canonical = self.game.getCanonicalForm(next_state, 1)
-                neighbor_states.append(next_canonical)
-        
-        # Cache the result
-        self.neighbor_cache[s] = neighbor_states
-        
-        return neighbor_states
-
-    def search(self, canonicalBoard):
+    def search(self, canonicalBoard, depth=0):
         """
         This function performs one iteration of MCTS. It is recursively called
         till a leaf node is found. The action chosen at each node is one that
@@ -130,8 +94,10 @@ class MCTS():
         if s in self._path:
             return -1.0  # Strong penalty for cycles
             
-        # Add to path for cycle detection
+        # Add to path for cycle detection and GNN processing
         self._path.add(s)
+        self._path_boards.append(canonicalBoard)
+        self._path_depths.append(depth)
         
         try:
             # Check if game ended
@@ -140,7 +106,10 @@ class MCTS():
             if self.Es[s] != 0:
                 # Terminal node
                 result = self.Es[s]
-                self._path.remove(s)  # Clean up path before return
+                # Clean up path before return
+                self._path.remove(s)
+                self._path_boards.pop()
+                self._path_depths.pop()
                 
                 # For 2-player games, negate the result
                 if hasattr(self.game, 'is_two_player') and self.game.is_two_player:
@@ -150,14 +119,28 @@ class MCTS():
 
             # Check if we've seen this state before
             if s not in self.Ps:
-                # Leaf node - generate neighbors and get neural network prediction
-                neighbor_states = self.get_neighbor_states(canonicalBoard)
+                # Leaf node - use all nodes in the current path for GNN
+                # Get valid moves for the current state
+                if s not in self.Vs:
+                    self.Vs[s] = self.game.getValidMoves(canonicalBoard, 1)
+                valids = self.Vs[s]
                 
                 try:
-                    # Call neural network with neighboring states
-                    self.Ps[s], v = self.nnet.predict(canonicalBoard, neighbor_states)
+                    # Call neural network with all boards in the current path
+                    # Make a copy of path_boards to avoid modification during prediction
+                    current_path_boards = None
+                    current_path_depths = None
+                    if len(self._path_boards) > 1:  # Only pass path if there's more than just the current state
+                        current_path_boards = list(self._path_boards[:-1])
+                        current_path_depths = list(self._path_depths[:-1])
                     
-                    valids = self.Vs[s]  # Already computed in get_neighbor_states
+                    # Try to call predict with path depths if supported
+                    try:
+                        self.Ps[s], v = self.nnet.predict(canonicalBoard, current_path_boards, current_path_depths)
+                    except TypeError:
+                        # Fallback for compatibility with networks that don't support path_depths
+                        self.Ps[s], v = self.nnet.predict(canonicalBoard, current_path_boards)
+                    
                     self.Ps[s] = self.Ps[s] * valids  # masking invalid moves
                     sum_Ps_s = np.sum(self.Ps[s])
                     if sum_Ps_s > 0:
@@ -171,6 +154,8 @@ class MCTS():
                     
                     # Remove from path before returning
                     self._path.remove(s)
+                    self._path_boards.pop()
+                    self._path_depths.pop()
                     
                     # For 2-player games, negate v
                     if hasattr(self.game, 'is_two_player') and self.game.is_two_player:
@@ -185,7 +170,10 @@ class MCTS():
                     self.Ps[s] = valids / np.sum(valids)
                     self.Ns[s] = 0
                     
-                    self._path.remove(s)  # Clean up path before return
+                    # Clean up path before return
+                    self._path.remove(s)
+                    self._path_boards.pop()
+                    self._path_depths.pop()
                     return 0
 
             # Select best action
@@ -210,15 +198,18 @@ class MCTS():
             
             # Handle edge case: no valid actions found
             if a == -1:
-                self._path.remove(s)  # Clean up path before return
+                # Clean up path before return
+                self._path.remove(s)
+                self._path_boards.pop()
+                self._path_depths.pop()
                 return 0
                 
             # Get next state
             next_s, next_player = self.game.getNextState(canonicalBoard, 1, a)
             next_s = self.game.getCanonicalForm(next_s, next_player)
 
-            # Recursive search
-            v = self.search(next_s)
+            # Recursive search with depth tracking
+            v = self.search(next_s, depth + 1)
 
             # Update Q value
             if (s, a) in self.Qsa:
@@ -232,6 +223,8 @@ class MCTS():
             
             # Remove from path before returning
             self._path.remove(s)
+            self._path_boards.pop()
+            self._path_depths.pop()
             
             # For 2-player games, negate v when returning
             if hasattr(self.game, 'is_two_player') and self.game.is_two_player:
@@ -243,5 +236,7 @@ class MCTS():
             # Ensure path is always cleaned up on exception
             if s in self._path:
                 self._path.remove(s)
+                self._path_boards.pop()
+                self._path_depths.pop()
             log.error(f"Unexpected error in MCTS search: {e}")
             return 0

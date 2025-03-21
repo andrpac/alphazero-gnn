@@ -68,6 +68,13 @@ class Coach():
             if r != 0:
                 return [(x[0], x[2], r * ((-1) ** (x[1] != self.curPlayer))) for x in trainExamples]
 
+    def getCheckpointFile(self, iteration):
+        """Get the filename for a checkpoint at a specific iteration"""
+        base_name = f'checkpoint_{iteration}'
+        if hasattr(self.args, 'use_gnn') and self.args.use_gnn:
+            base_name += '_gnn'
+        return base_name + '.pth.tar'
+
     def learn(self):
         """
         Performs numIters iterations with numEps episodes of self-play in each
@@ -106,8 +113,9 @@ class Coach():
             shuffle(trainExamples)
 
             # training new network, keeping a copy of the old one
-            self.nnet.save_checkpoint(folder=self.args.checkpoint, filename='temp.pth.tar')
-            self.pnet.load_checkpoint(folder=self.args.checkpoint, filename='temp.pth.tar')
+            temp_filename = 'temp.pth.tar'
+            self.nnet.save_checkpoint(folder=self.args.checkpoint, filename=temp_filename)
+            self.pnet.load_checkpoint(folder=self.args.checkpoint, filename=temp_filename)
             pmcts = MCTS(self.game, self.pnet, self.args)
 
             self.nnet.train(trainExamples)
@@ -121,16 +129,28 @@ class Coach():
             log.info('NEW/PREV WINS : %d / %d ; DRAWS : %d' % (nwins, pwins, draws))
             if pwins + nwins == 0 or float(nwins) / (pwins + nwins) < self.args.updateThreshold:
                 log.info('REJECTING NEW MODEL')
-                self.nnet.load_checkpoint(folder=self.args.checkpoint, filename='temp.pth.tar')
+                self.nnet.load_checkpoint(folder=self.args.checkpoint, filename=temp_filename)
             else:
                 log.info('ACCEPTING NEW MODEL')
-                self.nnet.save_checkpoint(folder=self.args.checkpoint, filename=self.getCheckpointFile(i))
-                self.nnet.save_checkpoint(folder=self.args.checkpoint, filename='best.pth.tar')
-
-    def getCheckpointFile(self, iteration):
-        return 'checkpoint_' + str(iteration) + '.pth.tar'
+                
+                # Determine checkpoint naming based on whether this is GNN or not
+                is_using_gnn = hasattr(self.args, 'use_gnn') and self.args.use_gnn
+                
+                if is_using_gnn:
+                    best_filename = 'best_gnn.pth.tar'
+                    iter_filename = f'checkpoint_{i}_gnn.pth.tar'
+                else:
+                    best_filename = 'best.pth.tar'
+                    iter_filename = f'checkpoint_{i}.pth.tar'
+                
+                # Save iteration-specific checkpoint
+                self.nnet.save_checkpoint(folder=self.args.checkpoint, filename=iter_filename)
+                
+                # Save as best model
+                self.nnet.save_checkpoint(folder=self.args.checkpoint, filename=best_filename)
 
     def saveTrainExamples(self, iteration):
+        """Save training examples to file"""
         folder = self.args.checkpoint
         if not os.path.exists(folder):
             os.makedirs(folder)
@@ -140,6 +160,7 @@ class Coach():
         f.closed
 
     def loadTrainExamples(self):
+        """Load training examples from file"""
         modelFile = os.path.join(self.args.load_folder_file[0], self.args.load_folder_file[1])
         examplesFile = modelFile + ".examples"
         if not os.path.isfile(examplesFile):
