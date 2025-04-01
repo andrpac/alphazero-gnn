@@ -1,0 +1,38 @@
+# AlphaZero Configuration with GNN Enhancement
+
+# Game parameters
+game:
+  board_size: 4              # Size of the TicTacToe board (3x3 standard)
+
+# Neural Network parameters
+neural_network:
+  lr: 0.001                  # Learning rate
+  dropout: 0.3               # Dropout rate
+  epochs: 20                 # Training epochs per iteration
+  batch_size: 64             # Batch size for training
+  
+  # GNN parameters
+  use_gnn: false             # Whether to use GNN enhancement
+  gnn_layers: 2              # Number of message passing layers in GNN
+
+# Training parameters
+training:
+  numIters: 10               # Number of training iterations
+  numEps: 20                 # Number of complete self-play games per iteration
+  tempThreshold: 15          # Move threshold for changing temperature
+  updateThreshold: 0.6       # Win rate threshold to replace current best model
+  maxlenOfQueue: 200000      # Maximum length of training examples queue
+  numItersForTrainExamplesHistory: 5   # Number of iterations to keep training examples
+  checkpoint_path: "./checkpoints/"    # Base directory to save checkpoints
+
+# Self-play and MCTS parameters
+mcts:
+  numMCTSSims: 10            # Number of MCTS simulations per move
+  cpuct: 1.0                 # Exploration constant in MCTS
+  
+  # Sliding window parameters for GNN training
+  expand_by: 5               # Number of additional nodes to expand for sliding window
+
+# Evaluation parameters
+evaluation:
+  arenaCompare: 100          # Number of games to play for model comparison

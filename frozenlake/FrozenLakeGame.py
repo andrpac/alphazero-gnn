@@ -14,6 +14,9 @@ class FrozenLakeGame:
             is_slippery: Whether the ice is slippery (stochastic transitions)
             render_mode: Render mode for gymnasium
         """
+        # Inform MCTS that this is a 1 player game!
+        self.is_two_player = False
+
         self.map_size = map_size
         self.action_size = 4  # up, right, down, left
         self.is_slippery = is_slippery
