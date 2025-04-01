@@ -1,4 +1,4 @@
-# AlphaZero Configuration with GNN Enhancement for MCTS Path
+# AlphaZero Configuration with GNN Enhancement
 
 # Game parameters
 game:
@@ -29,6 +29,9 @@ training:
 mcts:
   numMCTSSims: 10            # Number of MCTS simulations per move
   cpuct: 1.0                 # Exploration constant in MCTS
+  
+  # Sliding window parameters for GNN training
+  expand_by: 5               # Number of additional nodes to expand for sliding window
 
 # Evaluation parameters
 evaluation:

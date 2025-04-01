@@ -15,11 +15,6 @@ log = logging.getLogger(__name__)
 
 
 class Coach():
-    """
-    This class executes the self-play + learning. It uses the functions defined
-    in Game and NeuralNet. args are specified in main.py.
-    """
-
     def __init__(self, game, nnet, args):
         self.game = game
         self.nnet = nnet
@@ -30,22 +25,8 @@ class Coach():
         self.skipFirstSelfPlay = False  # can be overriden in loadTrainExamples()
 
     def executeEpisode(self):
-        """
-        This function executes one episode of self-play, starting with player 1.
-        As the game is played, each turn is added as a training example to
-        trainExamples. The game is played till the game ends. After the game
-        ends, the outcome of the game is used to assign values to each example
-        in trainExamples.
-
-        It uses a temp=1 if episodeStep < tempThreshold, and thereafter
-        uses temp=0.
-
-        Returns:
-            trainExamples: a list of examples of the form (canonicalBoard, currPlayer, pi,v)
-                           pi is the MCTS informed policy vector, v is +1 if
-                           the player eventually won the game, else -1.
-        """
         trainExamples = []
+        gnnExamples = []  # For GNN training with sliding window
         board = self.game.getInitBoard()
         self.curPlayer = 1
         episodeStep = 0
@@ -55,62 +36,90 @@ class Coach():
             canonicalBoard = self.game.getCanonicalForm(board, self.curPlayer)
             temp = int(episodeStep < self.args.tempThreshold)
 
+            # Standard MCTS search
             pi = self.mcts.getActionProb(canonicalBoard, temp=temp)
+            
+            # Collect standard training examples
             sym = self.game.getSymmetries(canonicalBoard, pi)
             for b, p in sym:
                 trainExamples.append([b, self.curPlayer, p, None])
+            
+            # If using GNN, perform tree expansion for sliding window training
+            if hasattr(self.args, 'use_gnn') and self.args.use_gnn:
+                # Expand tree to get improved policy and value estimates
+                expanded_nodes = self.mcts.expand_tree(canonicalBoard, 
+                                                     expand_by=getattr(self.args, 'expand_by', 5))
+                
+                # Process expanded nodes for GNN training
+                for s, (initial_pi, initial_v, expanded_pi, expanded_v) in expanded_nodes.items():
+                    # Find matching board state in symmetries
+                    for b, _ in sym:
+                        if self.game.stringRepresentation(b) == s:
+                            # Add example: board, player, initial_pi, initial_v, expanded_pi, expanded_v
+                            gnnExamples.append([b, self.curPlayer, initial_pi, initial_v, expanded_pi, expanded_v, None])
+                            break
 
+            # Choose action and make move
             action = np.random.choice(len(pi), p=pi)
             board, self.curPlayer = self.game.getNextState(board, self.curPlayer, action)
 
             r = self.game.getGameEnded(board, self.curPlayer)
 
             if r != 0:
-                return [(x[0], x[2], r * ((-1) ** (x[1] != self.curPlayer))) for x in trainExamples]
+                # Game ended, return examples with proper rewards
+                std_examples = [(x[0], x[2], r * ((-1) ** (x[1] != self.curPlayer))) for x in trainExamples]
+                
+                # Add GNN examples if using GNN
+                if hasattr(self.args, 'use_gnn') and self.args.use_gnn and gnnExamples:
+                    # Format: (board, player, initial_pi, initial_v, expanded_pi, expanded_v, reward)
+                    gnn_examples = [(x[0], x[1], x[2], x[3], x[4], x[5], r * ((-1) ** (x[1] != self.curPlayer))) 
+                                  for x in gnnExamples]
+                    return std_examples, gnn_examples
+                
+                return std_examples, []
 
     def getCheckpointFile(self, iteration):
-        """Get the filename for a checkpoint at a specific iteration"""
         base_name = f'checkpoint_{iteration}'
         if hasattr(self.args, 'use_gnn') and self.args.use_gnn:
             base_name += '_gnn'
         return base_name + '.pth.tar'
 
     def learn(self):
-        """
-        Performs numIters iterations with numEps episodes of self-play in each
-        iteration. After every iteration, it retrains neural network with
-        examples in trainExamples (which has a maximum length of maxlenofQueue).
-        It then pits the new neural network against the old one and accepts it
-        only if it wins >= updateThreshold fraction of games.
-        """
-
         for i in range(1, self.args.numIters + 1):
-            # bookkeeping
             log.info(f'Starting Iter #{i} ...')
-            # examples of the iteration
+
             if not self.skipFirstSelfPlay or i > 1:
                 iterationTrainExamples = deque([], maxlen=self.args.maxlenOfQueue)
+                iterationGnnExamples = deque([], maxlen=self.args.maxlenOfQueue)
 
                 for _ in tqdm(range(self.args.numEps), desc="Self Play"):
                     self.mcts = MCTS(self.game, self.nnet, self.args)  # reset search tree
-                    iterationTrainExamples += self.executeEpisode()
+                    std_examples, gnn_examples = self.executeEpisode()
+                    iterationTrainExamples += std_examples
+                    if gnn_examples:
+                        iterationGnnExamples += gnn_examples
 
                 # save the iteration examples to the history 
-                self.trainExamplesHistory.append(iterationTrainExamples)
+                self.trainExamplesHistory.append((iterationTrainExamples, iterationGnnExamples))
 
             if len(self.trainExamplesHistory) > self.args.numItersForTrainExamplesHistory:
                 log.warning(
                     f"Removing the oldest entry in trainExamples. len(trainExamplesHistory) = {len(self.trainExamplesHistory)}")
                 self.trainExamplesHistory.pop(0)
+                
             # backup history to a file
-            # NB! the examples were collected using the model from the previous iteration, so (i-1)  
             self.saveTrainExamples(i - 1)
 
             # shuffle examples before training
             trainExamples = []
-            for e in self.trainExamplesHistory:
-                trainExamples.extend(e)
+            gnnExamples = []
+            for std_ex, gnn_ex in self.trainExamplesHistory:
+                trainExamples.extend(std_ex)
+                if gnn_ex:
+                    gnnExamples.extend(gnn_ex)
             shuffle(trainExamples)
+            if gnnExamples:
+                shuffle(gnnExamples)
 
             # training new network, keeping a copy of the old one
             temp_filename = 'temp.pth.tar'
@@ -118,7 +127,13 @@ class Coach():
             self.pnet.load_checkpoint(folder=self.args.checkpoint, filename=temp_filename)
             pmcts = MCTS(self.game, self.pnet, self.args)
 
-            self.nnet.train(trainExamples)
+            # Train with standard examples and GNN examples if available
+            if hasattr(self.args, 'use_gnn') and self.args.use_gnn and gnnExamples:
+                log.info(f"Training with {len(trainExamples)} standard examples and {len(gnnExamples)} GNN examples")
+                self.nnet.train(trainExamples, gnnExamples)
+            else:
+                self.nnet.train(trainExamples)
+                
             nmcts = MCTS(self.game, self.nnet, self.args)
 
             log.info('PITTING AGAINST PREVIOUS VERSION')
@@ -127,7 +142,16 @@ class Coach():
             pwins, nwins, draws = arena.playGames(self.args.arenaCompare)
 
             log.info('NEW/PREV WINS : %d / %d ; DRAWS : %d' % (nwins, pwins, draws))
-            if pwins + nwins == 0 or float(nwins) / (pwins + nwins) < self.args.updateThreshold:
+            
+            # MODIFICATION: Always save the best model for the first iteration
+            if i == 1:
+                log.info('FIRST ITERATION: SAVING AS BEST MODEL')
+                accept_model = True
+            else:
+                # Normal acceptance logic
+                accept_model = (pwins + nwins > 0) and (float(nwins) / (pwins + nwins) >= self.args.updateThreshold)
+            
+            if not accept_model:
                 log.info('REJECTING NEW MODEL')
                 self.nnet.load_checkpoint(folder=self.args.checkpoint, filename=temp_filename)
             else:
@@ -144,13 +168,14 @@ class Coach():
                     iter_filename = f'checkpoint_{i}.pth.tar'
                 
                 # Save iteration-specific checkpoint
+                log.info(f'Saving iteration checkpoint to {self.args.checkpoint}/{iter_filename}')
                 self.nnet.save_checkpoint(folder=self.args.checkpoint, filename=iter_filename)
                 
                 # Save as best model
+                log.info(f'Saving best model to {self.args.checkpoint}/{best_filename}')
                 self.nnet.save_checkpoint(folder=self.args.checkpoint, filename=best_filename)
 
     def saveTrainExamples(self, iteration):
-        """Save training examples to file"""
         folder = self.args.checkpoint
         if not os.path.exists(folder):
             os.makedirs(folder)
@@ -160,7 +185,6 @@ class Coach():
         f.closed
 
     def loadTrainExamples(self):
-        """Load training examples from file"""
         modelFile = os.path.join(self.args.load_folder_file[0], self.args.load_folder_file[1])
         examplesFile = modelFile + ".examples"
         if not os.path.isfile(examplesFile):

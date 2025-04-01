@@ -5,31 +5,35 @@ import torch.optim as optim
 import numpy as np
 import os
 
-from gnn_utils import GNNProcessor
+from gnn_utils import PolicyValueGNN
 from connect4.Connect4Net import Connect4Net, Connect4NNetWrapper
 
 class Connect4GNNWrapper(Connect4NNetWrapper):
     """
-    GNN-enhanced wrapper for Connect4 that processes visited nodes in MCTS path.
+    GNN-enhanced wrapper for Connect4 that enhances features from the base network
+    to approximate deeper search results.
     """
     def __init__(self, game, args):
         super(Connect4GNNWrapper, self).__init__(game, args)
         
         # Determine feature dimension for Connect4 network
-        # Connect4Net has 64 filters in conv2 layer and directly applies the policy/value heads
+        # Connect4Net has 64 filters in conv2 layer
         self.feature_dim = 64 * self.board_x * self.board_y
         
-        # Create GNN processor
+        # Create the GNN that enhances board features
         num_layers = getattr(args, 'gnn_layers', 2)
-        self.gnn_processor = GNNProcessor(self.feature_dim, num_layers)
-        self.gnn_processor.to(self.device)
+        self.gnn = PolicyValueGNN(
+            feature_dim=self.feature_dim,
+            num_layers=num_layers
+        )
+        self.gnn.to(self.device)
     
     def extract_features(self, board_tensor):
         """Extract intermediate features from board using base network"""
         # Reshape input
         s = board_tensor.view(-1, 1, self.board_x, self.board_y)
         
-        # Pass through convolutional layers (Connect4 has 2 conv layers)
+        # Pass through convolutional layers
         s = F.relu(self.nnet.conv1(s))
         s = F.relu(self.nnet.conv2(s))
         
@@ -41,26 +45,23 @@ class Connect4GNNWrapper(Connect4NNetWrapper):
         
         return s
     
-    def process_with_policy_value_heads(self, features):
+    def apply_policy_value_heads(self, features):
         """Apply policy and value heads to processed features"""
-        # Connect4 directly applies policy/value heads to features without intermediate FC layers
         # Policy head
         pi = self.nnet.fc_policy(features)
-        pi = F.log_softmax(pi, dim=1)
+        pi_log = F.log_softmax(pi, dim=1)
         
         # Value head
         v = torch.tanh(self.nnet.fc_value(features))
         
-        return pi, v
+        return pi_log, v
     
-    def predict(self, board, path_boards=None, path_depths=None):
+    def predict(self, board):
         """
-        Enhanced predict method that uses GNN to process visited MCTS nodes
+        Standard prediction without GNN enhancement
         
         Args:
             board: Current board state
-            path_boards: List of boards from the MCTS search path
-            path_depths: List of depths from the MCTS search path (optional)
         
         Returns:
             pi: Policy vector
@@ -74,37 +75,7 @@ class Connect4GNNWrapper(Connect4NNetWrapper):
         self.nnet.eval()
         
         with torch.no_grad():
-            # Check if we should use GNN with path states
-            if path_boards and len(path_boards) > 0:
-                # Extract features for the target board
-                target_features = self.extract_features(board_tensor)
-                
-                # Extract features for path states
-                path_features = []
-                for path_board in path_boards:
-                    board_t = torch.FloatTensor(path_board.astype(np.float64)).to(self.device)
-                    board_t = board_t.view(1, self.board_x, self.board_y)
-                    path_features.append(self.extract_features(board_t))
-                
-                # Stack all features (target board first, then path boards)
-                all_features = torch.cat([target_features] + path_features, dim=0)
-                
-                # Prepare depths tensor if provided
-                depths_tensor = None
-                if path_depths is not None and len(path_depths) > 0:
-                    depths_tensor = torch.tensor([0] + path_depths, dtype=torch.long, device=self.device)
-                
-                # Process with GNN
-                updated_features = self.gnn_processor(all_features, depths_tensor)
-                
-                # Get updated features for target board (index 0)
-                updated_target_features = updated_features[0:1]
-                
-                # Apply policy and value heads to updated features
-                log_pi, v = self.process_with_policy_value_heads(updated_target_features)
-            else:
-                # Use standard neural network
-                log_pi, v = self.nnet(board_tensor)
+            log_pi, v = self.nnet(board_tensor)
             
             # Convert to numpy
             pi = torch.exp(log_pi).cpu().numpy()[0]
@@ -112,31 +83,139 @@ class Connect4GNNWrapper(Connect4NNetWrapper):
             
             return pi, v
     
+    def predict_with_gnn(self, board):
+        """
+        GNN-enhanced prediction that enhances features before
+        applying the same policy/value heads
+        
+        Args:
+            board: Current board state
+        
+        Returns:
+            pi: Enhanced policy vector
+            v: Enhanced value prediction
+        """
+        # Prepare board tensor
+        board_tensor = torch.FloatTensor(board.astype(np.float64)).to(self.device)
+        board_tensor = board_tensor.view(1, self.board_x, self.board_y)
+        
+        # Set network to evaluation mode
+        self.nnet.eval()
+        self.gnn.eval()
+        
+        with torch.no_grad():
+            # Extract board features
+            board_features = self.extract_features(board_tensor)
+            
+            # Apply GNN to enhance features
+            enhanced_features = self.gnn(board_features)
+            
+            # Apply policy and value heads to enhanced features
+            log_pi, v = self.apply_policy_value_heads(enhanced_features)
+            
+            # Convert to numpy
+            pi = torch.exp(log_pi).cpu().numpy()[0]
+            v = v.cpu().numpy()[0][0]
+            
+            return pi, v
+    
+    def train(self, examples, gnn_examples=None):
+        """
+        Train both the standard network and the GNN.
+        The GNN is trained to enhance features to match expanded policy/value.
+        
+        Args:
+            examples: List of standard examples (board, pi, v)
+            gnn_examples: List of GNN examples (board, player, std_pi, std_v, expanded_pi, expanded_v, reward)
+        """
+        # Create optimizers for both networks
+        nnet_optimizer = optim.Adam(self.nnet.parameters(), lr=self.args.lr)
+        gnn_optimizer = optim.Adam(self.gnn.parameters(), lr=self.args.lr)
+        
+        for epoch in range(self.args.epochs):
+            self.nnet.train()
+            self.gnn.train()
+            
+            # Train standard network on examples
+            if examples:
+                batch_idx = np.random.randint(0, len(examples), min(len(examples), self.args.batch_size))
+                boards, pis, vs = list(zip(*[examples[i] for i in batch_idx]))
+                
+                boards = torch.FloatTensor(np.array(boards)).to(self.device)
+                target_pis = torch.FloatTensor(np.array(pis)).to(self.device)
+                target_vs = torch.FloatTensor(np.array(vs).astype(np.float64)).to(self.device)
+                
+                out_pi, out_v = self.nnet(boards)
+                
+                l_pi = -torch.sum(target_pis * out_pi) / target_pis.size()[0]
+                l_v = torch.sum((target_vs - out_v.view(-1)) ** 2) / target_vs.size()[0]
+                total_loss = l_pi + l_v
+                
+                nnet_optimizer.zero_grad()
+                total_loss.backward()
+                nnet_optimizer.step()
+            
+            # Train GNN on examples from expanded tree
+            if gnn_examples and len(gnn_examples) > 0:
+                batch_idx = np.random.randint(0, len(gnn_examples), min(len(gnn_examples), self.args.batch_size))
+                batch = [gnn_examples[i] for i in batch_idx]
+                
+                boards = []
+                expanded_pis = []
+                expanded_vs = []
+                
+                # Format: (board, player, std_pi, std_v, expanded_pi, expanded_v, reward)
+                for b, _, _, _, expanded_pi, expanded_v, _ in batch:
+                    boards.append(b)
+                    expanded_pis.append(expanded_pi)
+                    expanded_vs.append(expanded_v)
+                
+                boards = torch.FloatTensor(np.array(boards)).to(self.device)
+                expanded_pis = torch.FloatTensor(np.array(expanded_pis)).to(self.device)
+                expanded_vs = torch.FloatTensor(np.array(expanded_vs).astype(np.float64)).to(self.device)
+                
+                # Extract features from the boards
+                board_features = self.extract_features(boards)
+                
+                # Use GNN to enhance features
+                enhanced_features = self.gnn(board_features)
+                
+                # Apply policy and value heads to enhanced features
+                gnn_log_pi, gnn_v = self.apply_policy_value_heads(enhanced_features)
+                
+                # Policy loss - cross entropy between GNN policy and expanded policy
+                gnn_pi_loss = -torch.sum(expanded_pis * gnn_log_pi) / expanded_pis.size()[0]
+                
+                # Value loss - MSE between GNN value and expanded value
+                gnn_v_loss = torch.sum((expanded_vs - gnn_v.view(-1)) ** 2) / expanded_vs.size()[0]
+                
+                # Total loss
+                gnn_total_loss = gnn_pi_loss + gnn_v_loss
+                
+                gnn_optimizer.zero_grad()
+                gnn_total_loss.backward()
+                gnn_optimizer.step()
+    
     def save_checkpoint(self, folder, filename):
-        """Save checkpoint including GNN"""
-        # Create folder if it doesn't exist
+        """Save model checkpoint including GNN to file"""
         if not os.path.exists(folder):
             os.makedirs(folder)
             
-        # Save base network and GNN in the same file
         filepath = os.path.join(folder, filename)
         torch.save({
             'state_dict': self.nnet.state_dict(),
-            'gnn_processor': self.gnn_processor.state_dict(),
+            'gnn': self.gnn.state_dict(),
         }, filepath)
     
     def load_checkpoint(self, folder, filename):
-        """Load checkpoint including GNN"""
+        """Load model checkpoint including GNN from file"""
         filepath = os.path.join(folder, filename)
         
-        # Load checkpoint
         checkpoint = torch.load(filepath, map_location=self.device)
         
-        # Load base network
         self.nnet.load_state_dict(checkpoint['state_dict'])
         
-        # Load GNN processor if available
-        if 'gnn_processor' in checkpoint:
-            self.gnn_processor.load_state_dict(checkpoint['gnn_processor'])
+        if 'gnn' in checkpoint:
+            self.gnn.load_state_dict(checkpoint['gnn'])
         else:
-            print(f"GNN processor state not found in {filepath}, initializing new GNN processor")
+            print(f"GNN state not found in {filepath}, initializing new GNN")

@@ -12,7 +12,7 @@ from MCTS import MCTS
 from register import get_game, list_games, has_gnn_version
 
 log = logging.getLogger(__name__)
-coloredlogs.install(level='INFO')  # Change this to DEBUG to see more info.
+coloredlogs.install(level='INFO')
 
 # A simple dotdict implementation for args
 class dotdict(dict):
@@ -23,16 +23,13 @@ class dotdict(dict):
         self[name] = value
 
 def load_config(config_file):
-    """Load configuration from YAML file"""
     with open(config_file, 'r') as f:
         config = yaml.safe_load(f)
     return config
 
 def config_to_args(config):
-    """Convert config dictionary to dotdict for compatibility"""
     args = dotdict({})
     
-    # Process all sections of the config
     for section in config:
         for key, value in config[section].items():
             args[key] = value
@@ -46,18 +43,6 @@ def config_to_args(config):
     return args
 
 def get_checkpoint_path(game_name, filename, use_gnn=False, base_path="./checkpoints"):
-    """
-    Get a standardized checkpoint path
-    
-    Args:
-        game_name: Name of the game
-        filename: Base filename
-        use_gnn: Whether this is a GNN model
-        base_path: Base checkpoint directory
-        
-    Returns:
-        Tuple of (folder_path, filename) for the checkpoint
-    """
     # Create game-specific checkpoint directory 
     folder_path = os.path.join(base_path, game_name)
     
@@ -73,19 +58,8 @@ def get_checkpoint_path(game_name, filename, use_gnn=False, base_path="./checkpo
     return folder_path, filename
 
 def pit_gnn_vs_regular(game_name, config_args):
-    """
-    Pit a GNN-enhanced model against a regular model.
-    
-    Args:
-        game_name: Name of the game
-        config_args: Configuration arguments
-        
-    Returns:
-        Tuple of (gnn_wins, reg_wins, draws)
-    """
     log.info(f'Pitting GNN-enhanced model against regular model for {game_name}')
     
-    # Check if game has GNN version
     if not has_gnn_version(game_name):
         log.error(f"Game '{game_name}' does not have a GNN version implemented")
         return
@@ -93,7 +67,6 @@ def pit_gnn_vs_regular(game_name, config_args):
     # Set up paths
     checkpoint_folder = os.path.join(config_args.checkpoint_path, game_name)
     
-    # Use explicit filenames for regular and GNN models
     reg_filename = 'best.pth.tar'
     gnn_filename = 'best_gnn.pth.tar'
     
@@ -165,16 +138,6 @@ def pit_gnn_vs_regular(game_name, config_args):
     return gnn_wins, reg_wins, draws
 
 def create_game_instance(GameClass, config_args):
-    """
-    Create a game instance with appropriate parameters
-    
-    Args:
-        GameClass: Game class to instantiate
-        config_args: Configuration arguments
-        
-    Returns:
-        Instantiated game object
-    """
     game_name = config_args.game
     
     if game_name == 'tictactoe':
@@ -189,8 +152,6 @@ def create_game_instance(GameClass, config_args):
     elif game_name == 'connect4':
         return GameClass(board_size=config_args.board_size)
     else:
-        # Generic initialization for future games
-        # This assumes the Game constructor can take all config args as kwargs
         return GameClass(**{k: v for k, v in config_args.items() 
                          if k in GameClass.__init__.__code__.co_varnames})
 

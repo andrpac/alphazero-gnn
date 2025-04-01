@@ -1,17 +1,13 @@
 class NeuralNet():
     """
     This class specifies the base NeuralNet class. To define your own neural
-    network, subclass this class and implement the functions below. The neural
-    network does not consider the current player, and instead only deals with
-    the canonical form of the board.
-
-    See othello/NNet.py for an example implementation.
+    network, subclass this class and implement the functions below.
     """
 
     def __init__(self, game):
         pass
 
-    def train(self, examples):
+    def train(self, examples, gnn_examples=None):
         """
         This function trains the neural network with examples obtained from
         self-play.
@@ -19,20 +15,36 @@ class NeuralNet():
         Input:
             examples: a list of training examples, where each example is of form
                       (board, pi, v). pi is the MCTS informed policy vector for
-                      the given board, and v is its value. The examples has
-                      board in its canonical form.
+                      the given board, and v is its value.
+            gnn_examples: a list of GNN training examples (optional), where each example
+                      is of form (board, std_pi, std_v, gnn_pi, gnn_v, v). This is used
+                      when training with GNN sliding window approach.
         """
         pass
 
     def predict(self, board):
         """
+        Standard prediction without GNN enhancement.
+        
         Input:
             board: current board in its canonical form.
 
         Returns:
-            pi: a policy vector for the current board- a numpy array of length
-                game.getActionSize
+            pi: a policy vector for the current board
             v: a float in [-1,1] that gives the value of the current board
+        """
+        pass
+        
+    def predict_with_gnn(self, board):
+        """
+        Prediction with GNN enhancement.
+        
+        Input:
+            board: current board in its canonical form.
+
+        Returns:
+            pi: a policy vector for the current board using GNN enhancement
+            v: a float in [-1,1] that gives the value of the current board using GNN enhancement
         """
         pass
 
