@@ -1,0 +1,42 @@
+# config.yaml
+
+# Game parameters
+game:
+  board_size: 9  # Connect4 board size
+
+# Neural Network parameters
+neural_network:
+  lr: 0.001               # Learning rate
+  dropout: 0.3            # Dropout rate
+  epochs: 20              # Training epochs per iteration
+  batch_size: 64          # Batch size for training
+  gnn_layers: 10          # Number of message-passing layers in GNN
+  num_residual_layers: 1  # Number of residual blocks in the network
+  gnn_feature_dim: 32     # Bottleneck size for GNN input
+
+# Training parameters
+training:
+  numIters: 60                                  # Number of training iterations
+  numEps: 30                                    # Number of self-play games per iteration
+  tempThreshold: 15                             # Temperature threshold for exploration
+  updateThreshold: 0.65                         # Win-rate threshold to accept new model
+  maxlenOfQueue: 200000                         # Max length of training examples queue
+  numItersForTrainExamplesHistory: 15           # How many iterations to keep in history
+  checkpoint: "./checkpoints/"                  # Base directory for checkpoints
+
+  # GNN modes (orthogonal flags)1
+  gnn_accumulate: true        # Collect examples every gnn_collect_interval moves
+  gnn_collect_interval: 5     # Interval (in moves) for graph expansions
+  gnn_train: true             # Train GNN every gnn_train_interval iterations
+  gnn_train_interval: 1       # Iterations between GNN training phases
+  gnn_predict: true           # Route inference through GNN pipeline
+
+# MCTS parameters
+mcts:
+  numMCTSSims: 40                                # MCTS simulations per move
+  cpuct: 1.0                                     # Exploration constant
+  expand_by: 10                                  # Extra sims per expansion
+
+# Evaluation parameters
+evaluation:
+  arenaCompare: 50                              # Games for model comparison
